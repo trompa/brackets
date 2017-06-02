@@ -1,46 +1,101 @@
 /*
- * Copyright (c) 2012 Adobe Systems Incorporated. All rights reserved.
- *  
+ * Copyright (c) 2012 - present Adobe Systems Incorporated. All rights reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"), 
- * to deal in the Software without restriction, including without limitation 
- * the rights to use, copy, modify, merge, publish, distribute, sublicense, 
- * and/or sell copies of the Software, and to permit persons to whom the 
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- *  
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- *  
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
- * 
+ *
  */
 
-/*jslint vars: true, plusplus: true, nomen: true, regexp: true, maxerr: 50 */
-/*global define, brackets, $, window, Mustache */
+/*jslint regexp: true */
 
 define(function (require, exports, module) {
     "use strict";
-    
+
     var KeyEvent           = brackets.getModule("utils/KeyEvent"),
         PreferencesManager = brackets.getModule("preferences/PreferencesManager"),
         StringUtils        = brackets.getModule("utils/StringUtils"),
         Strings            = brackets.getModule("strings"),
+        Mustache           = brackets.getModule("thirdparty/mustache/mustache"),
         tinycolor          = require("thirdparty/tinycolor-min");
-    
+
     /** Mustache template that forms the bare DOM structure of the UI */
     var ColorEditorTemplate = require("text!ColorEditorTemplate.html");
-    
+
     /**
      * @const @type {number}
      */
     var STEP_MULTIPLIER = 5;
-    
+
+    /**
+     * Convert 0x notation into hex6 format for tinycolor
+     * compatibility: ("0xFFAACC" => "#FFFFFF")
+     * @param {string} str - String to ensure hex format for
+     * @returns {string} - str in hex format
+     */
+    function ensureHexFormat(str) {
+        return (/^0x/).test(str) ? str.replace("0x","#") : str;
+    }
+
+    /**
+     * Converts a color to a 0x-prefixed string
+     * @param {tinycolor} color - color to convert
+     * @returns {string} - color as 0x-prefixed string
+     */
+    function as0xString(color) {
+        return color.toHexString().replace("#", "0x");
+    }
+
+    /**
+     * Converts 0x-prefixed color to hex
+     * @param {string} color - Color to convert
+     * @param {boolean} convertToString - true if color should 
+     *                                    be returned as string
+     * @returns {tinycolor|string} - Hex color as a Tinycolor object
+     *                               or a hex string
+     */
+    function _0xColorToHex(color, convertToStr) {
+        var hexColor = tinycolor(color.replace("0x", "#"));
+        hexColor._format = "0x";
+
+        if (convertToStr) {
+            return hexColor.toString();
+        }
+        return hexColor;
+    }
+
+    /**
+     * Ensures that a string is in Tinycolor supported format
+     * @param {string} color - Color to check the format for
+     * @param {boolean} convertToString - true if color should 
+     *                                    be returned as string
+     * @returns {tinycolor|string} - Color as a Tinycolor object
+     *                               or a hex string
+     */
+    function checkSetFormat(color, convertToStr) {
+        if ((/^0x/).test(color)) {
+            return _0xColorToHex(color, convertToStr);
+        }
+        if (convertToStr) {
+            return tinycolor(color).toString();
+        }
+        return tinycolor(color);
+    }
+
     /**
      * Color picker control; may be used standalone or within an InlineColorEditor inline widget.
      * @param {!jQuery} $parent  DOM node into which to append the root of the color picker UI
@@ -52,7 +107,7 @@ define(function (require, exports, module) {
         // Create the DOM structure, filling in localized strings via Mustache
         this.$element = $(Mustache.render(ColorEditorTemplate, Strings));
         $parent.append(this.$element);
-        
+
         this._callback = callback;
 
         this._handleKeydown = this._handleKeydown.bind(this);
@@ -64,19 +119,21 @@ define(function (require, exports, module) {
         this._handleHueDrag = this._handleHueDrag.bind(this);
         this._handleSelectionFieldDrag = this._handleSelectionFieldDrag.bind(this);
 
-        this._color = tinycolor(color);
         this._originalColor = color;
+        this._color = checkSetFormat(color);
+
         this._redoColor = null;
         this._isUpperCase = PreferencesManager.get("uppercaseColors");
         PreferencesManager.on("change", "uppercaseColors", function () {
             this._isUpperCase = PreferencesManager.get("uppercaseColors");
         }.bind(this));
-        
+
         this.$colorValue = this.$element.find(".color-value");
         this.$buttonList = this.$element.find("ul.button-bar");
         this.$rgbaButton = this.$element.find(".rgba");
         this.$hexButton = this.$element.find(".hex");
         this.$hslButton = this.$element.find(".hsla");
+        this.$0xButton = this.$element.find(".0x");
         this.$currentColor = this.$element.find(".current-color");
         this.$originalColor = this.$element.find(".original-color");
         this.$selection = this.$element.find(".color-selection-field");
@@ -88,16 +145,17 @@ define(function (require, exports, module) {
         this.$opacitySlider = this.$element.find(".opacity-slider");
         this.$opacitySelector = this.$element.find(".opacity-slider .selector-base");
         this.$swatches = this.$element.find(".swatches");
-        
+
         // Create quick-access color swatches
         this._addSwatches(swatches);
-        
+
         // Attach event listeners to main UI elements
         this._addListeners();
-        
+
         // Initially selected color
-        this.$originalColor.css("background-color", this._originalColor);
-        this._commitColor(color);
+        this.$originalColor.css("background-color", checkSetFormat(this._originalColor));
+        
+        this._commitColor(color);   
     }
 
     /**
@@ -106,42 +164,43 @@ define(function (require, exports, module) {
      * @type {tinycolor|string}
      */
     ColorEditor.prototype._color = null;
-    
+
     /**
      * An HSV representation of the currently selected color.
      * TODO (#2201): type of _hsv.s/.v is unpredictable
      * @type {!{h:number, s:number|string, v:number|string, a:number}}
      */
     ColorEditor.prototype._hsv = tinycolor("rgba(0,0,0,1)").toHsv();
-    
+
     /**
      * Color that was selected before undo(), if undo was the last change made. Else null.
      * @type {?string}
      */
     ColorEditor.prototype._redoColor = null;
-    
+
     /**
      * Initial value the color picker was opened with
      * @type {!string}
      */
     ColorEditor.prototype._originalColor = null;
-    
-    
+
+
     /** Returns the root DOM node of the ColorPicker UI */
     ColorEditor.prototype.getRootElement = function () {
         return this.$element;
     };
-        
+
     /** Attach event listeners for main UI elements */
     ColorEditor.prototype._addListeners = function () {
         this._bindColorFormatToRadioButton("rgba");
         this._bindColorFormatToRadioButton("hex");
         this._bindColorFormatToRadioButton("hsla");
-        
+        this._bindColorFormatToRadioButton("0x");
+
         this._bindInputHandlers();
-        
+
         this._bindOriginalColorButton();
-        
+
         this._registerDragHandler(this.$selection, this._handleSelectionFieldDrag);
         this._registerDragHandler(this.$hueSlider, this._handleHueDrag);
         this._registerDragHandler(this.$opacitySlider, this._handleOpacityDrag);
@@ -149,7 +208,7 @@ define(function (require, exports, module) {
         this._bindKeyHandler(this.$hueBase, this._handleHueKeydown);
         this._bindKeyHandler(this.$opacitySelector, this._handleOpacityKeydown);
         this._bindKeyHandler(this.$hslButton, this._handleHslKeydown);
-        
+
         // General key handler gets bubbling events from any focusable part of widget
         this._bindKeyHandler(this.$element, this._handleKeydown);
     };
@@ -158,21 +217,21 @@ define(function (require, exports, module) {
      * Update all UI elements to reflect the selected color (_color and _hsv). It is usually
      * incorrect to call this directly; use _commitColor() or setColorAsHsv() instead.
      */
+
     ColorEditor.prototype._synchronize = function () {
-        var colorValue  = this.getColor().getOriginalInput(),
-            colorObject = tinycolor(colorValue),
-            hueColor    = "hsl(" + this._hsv.h + ", 100%, 50%)";
-        
+        var colorValue  = this.getColor().getOriginalInput();
+        var colorObject = checkSetFormat(colorValue);
+        var hueColor    = "hsl(" + this._hsv.h + ", 100%, 50%)";
         this._updateColorTypeRadioButtons(colorObject.getFormat());
         this.$colorValue.val(colorValue);
-        this.$currentColor.css("background-color", colorValue);
+        this.$currentColor.css("background-color", checkSetFormat(colorValue, true));
         this.$selection.css("background-color", hueColor);
         this.$hueBase.css("background-color", hueColor);
-        
+
         // Update gradients in color square & opacity slider
         this.$selectionBase.css("background-color", colorObject.toHexString());
-        this.$opacityGradient.css("background-image", "-webkit-gradient(linear, 0% 0%, 0% 100%, from(" + hueColor + "), to(transparent))");
-        
+        this.$opacityGradient.css("background-image", "linear-gradient(" + hueColor + ", transparent)");
+
         // Update slider thumb positions
         this.$hueSelector.css("bottom", (this._hsv.h / 360 * 100) + "%");
         this.$opacitySelector.css("bottom", (this._hsv.a * 100) + "%");
@@ -199,7 +258,7 @@ define(function (require, exports, module) {
         }
         return false;
     };
-    
+
     /**
      * Remove any preference listeners before destroying the editor.
      */
@@ -228,6 +287,9 @@ define(function (require, exports, module) {
         case "hsl":
             this.$buttonList.find(".hsla").parent().addClass("selected");
             break;
+        case "0x":
+            this.$buttonList.find(".0x").parent().addClass("selected");
+            break;
         }
     };
 
@@ -237,8 +299,9 @@ define(function (require, exports, module) {
             self = this;
         handler = function (event) {
             var newFormat   = $(event.currentTarget).html().toLowerCase().replace("%", "p"),
-                newColor    = self.getColor().toString(),
-                colorObject = tinycolor(newColor);
+                newColor    = self.getColor().toString();
+
+            var colorObject = checkSetFormat(newColor);
 
             switch (newFormat) {
             case "hsla":
@@ -253,6 +316,11 @@ define(function (require, exports, module) {
             case "hex":
                 newColor = colorObject.toHexString();
                 self._hsv.a = 1;
+                break;
+            case "0x":
+                newColor = as0xString(colorObject);
+                self._hsv.a = 1;
+                self._format = "0x";
                 break;
             }
 
@@ -292,16 +360,16 @@ define(function (require, exports, module) {
         }
         return color;
     };
-    
+
     /**
-     * Normalize the given color string into the format used by tinycolor, by adding a space 
+     * Normalize the given color string into the format used by tinycolor, by adding a space
      * after commas.
      * @param {string} color The color to be corrected if it looks like an RGB or HSL color.
      * @return {string} a normalized color string.
      */
     ColorEditor.prototype._normalizeColorString = function (color) {
         var normalizedColor = color;
-                    
+
         // Convert 6-digit hex to 3-digit hex as TinyColor (#ffaacc -> #fac)
         if (color.match(/^#[0-9a-fA-F]{6}/)) {
             return tinycolor(color).toString();
@@ -317,34 +385,35 @@ define(function (require, exports, module) {
     /** Handle changes in text field */
     ColorEditor.prototype._handleTextFieldInput = function (losingFocus) {
         var newColor    = $.trim(this.$colorValue.val()),
-            newColorObj = tinycolor(newColor),
+            newColorObj = checkSetFormat(newColor),
             newColorOk  = newColorObj.isValid();
 
+
         // TinyColor will auto correct an incomplete rgb or hsl value into a valid color value.
-        // eg. rgb(0,0,0 -> rgb(0, 0, 0) 
+        // eg. rgb(0,0,0 -> rgb(0, 0, 0)
         // We want to avoid having TinyColor do this, because we don't want to sync the color
         // to the UI if it's incomplete. To accomplish this, we first normalize the original
         // color string into the format TinyColor would generate, and then compare it to what
         // TinyColor actually generates to see if it's different. If so, then we assume the color
         // was incomplete to begin with.
         if (newColorOk) {
-            newColorOk = (newColorObj.toString() === this._normalizeColorString(newColor));
+            newColorOk = (newColorObj.toString() === this._normalizeColorString(ensureHexFormat(newColor)));
         }
-                
+
         // Restore to the previous valid color if the new color is invalid or incomplete.
         if (losingFocus && !newColorOk) {
             newColor = this.getColor().toString();
         }
-        
+
         // Sync only if we have a valid color or we're restoring the previous valid color.
         if (losingFocus || newColorOk) {
             this._commitColor(newColor, true);
         }
     };
-                    
+
     ColorEditor.prototype._bindInputHandlers = function () {
         var self = this;
-                    
+
         this.$colorValue.bind("input", function (event) {
             self._handleTextFieldInput(false);
         });
@@ -360,13 +429,15 @@ define(function (require, exports, module) {
      */
     ColorEditor.prototype._addSwatches = function (swatches) {
         var self = this;
- 
+
         // Create swatches
         swatches.forEach(function (swatch) {
+            var swatchValue = checkSetFormat(swatch.value, true);
             var stringFormat = (swatch.count > 1) ? Strings.COLOR_EDITOR_USED_COLOR_TIP_PLURAL : Strings.COLOR_EDITOR_USED_COLOR_TIP_SINGULAR,
                 usedColorTip = StringUtils.format(stringFormat, swatch.value, swatch.count);
+
             self.$swatches.append("<li tabindex='0'><div class='swatch-bg'><div class='swatch' style='background-color: " +
-                    swatch.value + ";' title='" + usedColorTip + "'></div></div> <span class='value'" + " title='" +
+                    swatchValue + ";' title='" + usedColorTip + "'></div></div> <span class='value'" + " title='" +
                     usedColorTip + "'>" + swatch.value + "</span></li>");
         });
 
@@ -376,6 +447,7 @@ define(function (require, exports, module) {
                     event.keyCode === KeyEvent.DOM_VK_ENTER ||
                     event.keyCode === KeyEvent.DOM_VK_SPACE) {
                 // Enter/Space is same as clicking on swatch
+
                 self._commitColor($(event.currentTarget).find(".value").html());
             } else if (event.keyCode === KeyEvent.DOM_VK_TAB) {
                 // Tab on last swatch loops back to color square
@@ -408,11 +480,11 @@ define(function (require, exports, module) {
     ColorEditor.prototype.setColorAsHsv = function (hsv) {
         var colorVal, newColor,
             oldFormat = tinycolor(this.getColor()).getFormat();
-        
+
         // Set our state to the new color
         $.extend(this._hsv, hsv);
         newColor = tinycolor(this._hsv);
-        
+
         switch (oldFormat) {
         case "hsl":
             colorVal = newColor.toHslString();
@@ -427,6 +499,9 @@ define(function (require, exports, module) {
         case "name":
             colorVal = this._hsv.a < 1 ? newColor.toRgbString() : newColor.toHexString();
             break;
+        case "0x":
+            colorVal = as0xString(newColor);
+            break;
         }
         colorVal = this._isUpperCase ? colorVal.toUpperCase() : colorVal;
         this._commitColor(colorVal, false);
@@ -439,11 +514,15 @@ define(function (require, exports, module) {
      * @param {boolean=} resetHsv  Pass false ONLY if hsv set already been modified to match colorVal. Default: true.
      */
     ColorEditor.prototype._commitColor = function (colorVal, resetHsv) {
+
         if (resetHsv === undefined) {
             resetHsv = true;
         }
         this._callback(colorVal);
-        this._color = tinycolor(colorVal);
+
+        var colorObj = checkSetFormat(colorVal);
+        colorObj._originalInput = colorVal;
+        this._color = colorObj;
 
         if (resetHsv) {
             this._hsv = this._color.toHsv();
@@ -461,14 +540,14 @@ define(function (require, exports, module) {
     ColorEditor.prototype.setColorFromString = function (colorVal) {
         this._commitColor(colorVal, true);  // TODO (#2204): make this less entangled with setColorAsHsv()
     };
-    
+
     /** Converts a mouse coordinate to be relative to zeroPos, and clips to [0, maxOffset] */
     function _getNewOffset(pos, zeroPos, maxOffset) {
         var offset = pos - zeroPos;
         offset = Math.min(maxOffset, Math.max(0, offset));
         return offset;
     }
-    
+
     /** Dragging color square's thumb */
     ColorEditor.prototype._handleSelectionFieldDrag = function (event) {
         var height  = this.$selection.height(),
@@ -524,16 +603,15 @@ define(function (require, exports, module) {
         });
         $element.mousedown(handler);  // run drag-update handler on initial mousedown too
     };
-    
+
     /**
      * Handles undo gestures while color picker has focus. We don't want to let CodeMirror's
      * usual undo logic run since it will destroy our marker.
      */
     ColorEditor.prototype.undo = function () {
         if (this._originalColor.toString() !== this._color.toString()) {
-            var curColor = this._color.toString();
             this._commitColor(this._originalColor, true);
-            this._redoColor = curColor;
+            this._redoColor = this._color.toString();
         }
     };
 
@@ -545,7 +623,7 @@ define(function (require, exports, module) {
         }
     };
 
-    /** 
+    /**
      * Global handler for keys in the color editor. Catches undo/redo keys and traps
      * arrow keys that would be handled by the scroller.
      */
@@ -569,19 +647,19 @@ define(function (require, exports, module) {
                     event.keyCode === KeyEvent.DOM_VK_RIGHT ||
                     event.keyCode === KeyEvent.DOM_VK_UP ||
                     event.keyCode === KeyEvent.DOM_VK_DOWN) {
-                // Prevent arrow keys that weren't handled by a child control 
-                // from being handled by a parent, either through bubbling or 
+                // Prevent arrow keys that weren't handled by a child control
+                // from being handled by a parent, either through bubbling or
                 // through default native behavior. There isn't a good general
                 // way to tell if the target would handle this event by default,
                 // so we look to see if the target is a text input control.
                 var preventDefault = false,
                     $target = $(event.target);
-                    
+
                 // If the input has no "type" attribute, it defaults to text. So we
                 // have to check for both possibilities.
                 if ($target.is("input:not([type])") || $target.is("input[type=text]")) {
                     // Text input control. In WebKit, if the cursor gets to the start
-                    // or end of a text field and can't move any further, the default 
+                    // or end of a text field and can't move any further, the default
                     // action doesn't take place in the text field, so the event is handled
                     // by the outer scroller. We have to prevent in that case too.
                     if ($target[0].selectionStart === $target[0].selectionEnd &&

@@ -1,30 +1,28 @@
 /*
- * Copyright (c) 2012 Adobe Systems Incorporated. All rights reserved.
- *  
+ * Copyright (c) 2012 - present Adobe Systems Incorporated. All rights reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"), 
- * to deal in the Software without restriction, including without limitation 
- * the rights to use, copy, modify, merge, publish, distribute, sublicense, 
- * and/or sell copies of the Software, and to permit persons to whom the 
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- *  
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- *  
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
- * 
+ *
  */
 
-
-/*jslint vars: true, plusplus: true, browser: true, nomen: true, indent: 4, forin: true, maxerr: 50, regexp: true */
-/*jshint unused: false */
-/*global window, navigator, Node, console */
+/*jslint forin: true */
+/*global Node, MessageEvent */
 /*theseus instrument: false */
 
 /**
@@ -32,22 +30,41 @@
  * modules should define a single function that returns an object of all
  * exported functions.
  */
-function RemoteFunctions(experimental) {
+function RemoteFunctions(config, remoteWSPort) {
     "use strict";
 
+    var experimental;
+    if (!config) {
+        experimental = false;    
+    } else {
+        experimental = config.experimental;    
+    }
     var lastKeepAliveTime = Date.now();
-    
+    var req, timeout;
+    var animateHighlight = function (time) {
+        if(req) {
+            window.cancelAnimationFrame(req);	
+            window.clearTimeout(timeout);
+        }
+        req = window.requestAnimationFrame(redrawHighlights);
+
+        timeout = setTimeout(function () {
+            window.cancelAnimationFrame(req);	
+            req = null;
+        }, time * 1000);
+    };
+
     /**
      * @type {DOMEditHandler}
      */
     var _editHandler;
-    
+
     var HIGHLIGHT_CLASSNAME = "__brackets-ld-highlight",
         KEEP_ALIVE_TIMEOUT  = 3000;   // Keep alive timeout value, in milliseconds
-    
+
     // determine whether an event should be processed for Live Development
     function _validEvent(event) {
-        if (navigator.platform.substr(0, 3) === "Mac") {
+        if (window.navigator.platform.substr(0, 3) === "Mac") {
             // Mac
             return event.metaKey;
         } else {
@@ -100,6 +117,23 @@ function RemoteFunctions(experimental) {
             element.removeAttribute(key);
         }
     }
+    
+    // Checks if the element is in Viewport in the client browser
+    function isInViewport(element) {
+        var rect = element.getBoundingClientRect();
+        var html = window.document.documentElement;
+        return (
+            rect.top >= 0 &&
+            rect.left >= 0 &&
+            rect.bottom <= (window.innerHeight || html.clientHeight) &&
+            rect.right <= (window.innerWidth || html.clientWidth)
+        );
+    }
+    
+    // returns the distance from the top of the closest relatively positioned parent element
+    function getDocumentOffsetTop(element) {
+        return element.offsetTop + (element.offsetParent ? getDocumentOffsetTop(element.offsetParent) : 0);
+    }
 
     // construct the info menu
     function Menu(element) {
@@ -127,7 +161,7 @@ function RemoteFunctions(experimental) {
                 y = offset.top + this.element.offsetHeight;
 
             // create the container
-            this.body = document.createElement("div");
+            this.body = window.document.createElement("div");
             this.body.style.setProperty("z-index", 2147483647);
             this.body.style.setProperty("position", "absolute");
             this.body.style.setProperty("left", x + "px");
@@ -143,7 +177,7 @@ function RemoteFunctions(experimental) {
         },
 
         addItem: function (target) {
-            var item = document.createElement("div");
+            var item = window.document.createElement("div");
             item.style.setProperty("padding", "2px 6px");
             if (this.body.childNodes.length > 0) {
                 item.style.setProperty("border-top", "1px solid #ccc");
@@ -154,7 +188,7 @@ function RemoteFunctions(experimental) {
             item.addEventListener("click", this.onClick.bind(this, target.url));
 
             if (target.file) {
-                var file = document.createElement("i");
+                var file = window.document.createElement("i");
                 file.style.setProperty("float", "right");
                 file.style.setProperty("margin-left", "12px");
                 file.innerHTML = " " + target.file;
@@ -168,16 +202,16 @@ function RemoteFunctions(experimental) {
                 this.body = this.createBody();
             }
             if (!this.body.parentNode) {
-                document.body.appendChild(this.body);
+                window.document.body.appendChild(this.body);
             }
-            document.addEventListener("click", this.remove);
+            window.document.addEventListener("click", this.remove);
         },
 
         remove: function () {
             if (this.body && this.body.parentNode) {
-                document.body.removeChild(this.body);
+                window.document.body.removeChild(this.body);
             }
-            document.removeEventListener("click", this.remove);
+            window.document.removeEventListener("click", this.remove);
         }
 
     };
@@ -235,101 +269,262 @@ function RemoteFunctions(experimental) {
             }
             return false;
         },
-
         _makeHighlightDiv: function (element, doAnimation) {
             var elementBounds = element.getBoundingClientRect(),
                 highlight = window.document.createElement("div"),
-                styles = window.getComputedStyle(element);
+                elementStyling = window.getComputedStyle(element),
+                transitionDuration = parseFloat(elementStyling.getPropertyValue('transition-duration')),
+                animationDuration = parseFloat(elementStyling.getPropertyValue('animation-duration'));
             
+            if (transitionDuration) {
+                animateHighlight(transitionDuration);
+            }
+
+            if (animationDuration) {
+                animateHighlight(animationDuration);
+            }
+
             // Don't highlight elements with 0 width & height
             if (elementBounds.width === 0 && elementBounds.height === 0) {
                 return;
             }
             
-            highlight.className = HIGHLIGHT_CLASSNAME;
+            var realElBorder = {
+              right: elementStyling.getPropertyValue('border-right-width'),
+              left: elementStyling.getPropertyValue('border-left-width'),
+              top: elementStyling.getPropertyValue('border-top-width'),
+              bottom: elementStyling.getPropertyValue('border-bottom-width')
+            };
             
+            var borderBox = elementStyling.boxSizing === 'border-box';
+            
+            var innerWidth = parseFloat(elementStyling.width),
+                innerHeight = parseFloat(elementStyling.height),
+                outerHeight = innerHeight,
+                outerWidth = innerWidth;
+                
+            if (!borderBox) {
+                innerWidth += parseFloat(elementStyling.paddingLeft) + parseFloat(elementStyling.paddingRight);
+                innerHeight += parseFloat(elementStyling.paddingTop) + parseFloat(elementStyling.paddingBottom);
+                outerWidth = innerWidth + parseFloat(realElBorder.right) +
+                parseFloat(realElBorder.left),
+                outerHeight = innerHeight + parseFloat(realElBorder.bottom) + parseFloat(realElBorder.top);
+            }
+
+          
+            var visualisations = {
+                horizontal: "left, right",
+                vertical: "top, bottom"
+            };
+          
+            var drawPaddingRect = function(side) {
+              var elStyling = {};
+                
+              if (visualisations.horizontal.indexOf(side) >= 0) {
+                elStyling['width'] =  elementStyling.getPropertyValue('padding-' + side);
+                elStyling['height'] = innerHeight + "px";
+                elStyling['top'] = 0;
+                  
+                  if (borderBox) {
+                    elStyling['height'] = innerHeight - parseFloat(realElBorder.top) - parseFloat(realElBorder.bottom) + "px";
+                  }
+                
+              } else {
+                elStyling['height'] = elementStyling.getPropertyValue('padding-' + side);  
+                elStyling['width'] = innerWidth + "px";
+                elStyling['left'] = 0;
+                  
+                  if (borderBox) {
+                    elStyling['width'] = innerWidth - parseFloat(realElBorder.left) - parseFloat(realElBorder.right) + "px";
+                  }
+              }
+                
+              elStyling[side] = 0;
+              elStyling['position'] = 'absolute';
+              
+              return elStyling;
+            };
+          
+          var drawMarginRect = function(side) {
+            var elStyling = {};
+            
+            var margin = [];
+            margin['right'] = parseFloat(elementStyling.getPropertyValue('margin-right'));
+            margin['top'] = parseFloat(elementStyling.getPropertyValue('margin-top'));
+            margin['bottom'] = parseFloat(elementStyling.getPropertyValue('margin-bottom'));
+            margin['left'] = parseFloat(elementStyling.getPropertyValue('margin-left'));
+          
+            if(visualisations['horizontal'].indexOf(side) >= 0) {
+
+              elStyling['width'] = elementStyling.getPropertyValue('margin-' + side);
+              elStyling['height'] = outerHeight + margin['top'] + margin['bottom'] + "px";
+              elStyling['top'] = "-" + (margin['top'] + parseFloat(realElBorder.top))  + "px";
+            } else {
+              elStyling['height'] = elementStyling.getPropertyValue('margin-' + side);
+              elStyling['width'] = outerWidth + "px";
+              elStyling['left'] = "-" + realElBorder.left;
+            }
+
+            elStyling[side] = "-" + (margin[side] + parseFloat(realElBorder[side])) + "px";
+            elStyling['position'] = 'absolute';
+
+            return elStyling;
+          };
+
+            var setVisibility = function (el) {
+                if (
+                    !config.remoteHighlight.showPaddingMargin || 
+                    parseInt(el.height, 10) <= 0 || 
+                    parseInt(el.width, 10) <= 0 
+                ) {
+                    el.display = 'none';
+                } else {
+                    el.display = 'block';
+                }
+            };
+            
+            var mainBoxStyles = config.remoteHighlight.stylesToSet;
+            
+            var paddingVisualisations = [
+              drawPaddingRect('top'),
+              drawPaddingRect('right'),
+              drawPaddingRect('bottom'),
+              drawPaddingRect('left')  
+            ];
+                
+            var marginVisualisations = [
+              drawMarginRect('top'),
+              drawMarginRect('right'),
+              drawMarginRect('bottom'),
+              drawMarginRect('left')  
+            ];
+            
+            var setupVisualisations = function (arr, config) {
+                var i;
+                for (i = 0; i < arr.length; i++) {
+                    setVisibility(arr[i]);
+                    
+                    // Applies to every visualisationElement (padding or margin div)
+                    arr[i]["transform"] = "none";
+                    var el = window.document.createElement("div"),
+                        styles = Object.assign(
+                        {},
+                        config,
+                        arr[i]
+                    );
+
+                    _setStyleValues(styles, el.style);
+
+                    highlight.appendChild(el);
+                }
+            };
+            
+            setupVisualisations(
+                marginVisualisations,
+                config.remoteHighlight.marginStyling
+            );
+            setupVisualisations(
+                paddingVisualisations,
+                config.remoteHighlight.paddingStyling
+            );
+            
+            highlight.className = HIGHLIGHT_CLASSNAME;
+
             var offset = _screenOffset(element);
+            		
+            var el = element,		
+            offsetLeft = 0,		
+            offsetTop  = 0;		
+             		
+            // Probably the easiest way to get elements position without including transform		
+            do {		
+               offsetLeft += el.offsetLeft;		
+               offsetTop  += el.offsetTop;		
+               el = el.offsetParent;		
+            } while(el);
 
             var stylesToSet = {
-                "left": offset.left + "px",
-                "top": offset.top + "px",
-                "width": elementBounds.width + "px",
-                "height": elementBounds.height + "px",
+                "left": offsetLeft + "px",
+                "top": offsetTop + "px",
+                "width": innerWidth + "px",
+                "height": innerHeight + "px",
                 "z-index": 2000000,
                 "margin": 0,
                 "padding": 0,
                 "position": "absolute",
                 "pointer-events": "none",
-                "border-top-left-radius": styles.borderTopLeftRadius,
-                "border-top-right-radius": styles.borderTopRightRadius,
-                "border-bottom-left-radius": styles.borderBottomLeftRadius,
-                "border-bottom-right-radius": styles.borderBottomRightRadius,
-                "border-style": "solid",
-                "border-width": "1px",
-                "border-color": "#00a2ff",
                 "box-shadow": "0 0 1px #fff",
-                "box-sizing": "border-box"
+                "box-sizing": elementStyling.getPropertyValue('box-sizing'),		
+                "border-right": elementStyling.getPropertyValue('border-right'),		
+                "border-left": elementStyling.getPropertyValue('border-left'),		
+                "border-top": elementStyling.getPropertyValue('border-top'),		
+                "border-bottom": elementStyling.getPropertyValue('border-bottom'),		
+                "transform": elementStyling.getPropertyValue('transform'),		
+                "transform-origin": elementStyling.getPropertyValue('transform-origin'),		
+                "border-color": config.remoteHighlight.borderColor
             };
             
-            var animateStartValues = {
-                "background-color": "rgba(0, 162, 255, 0.5)",
-                "opacity": 0
-            };
-            
-            var animateEndValues = {
-                "background-color": "rgba(0, 162, 255, 0)",
-                "opacity": 1
-            };
-            
+            var mergedStyles = Object.assign({}, stylesToSet,  config.remoteHighlight.stylesToSet);
+
+            var animateStartValues = config.remoteHighlight.animateStartValue;
+
+            var animateEndValues = config.remoteHighlight.animateEndValue;
+
             var transitionValues = {
-                "-webkit-transition-property": "opacity, background-color",
-                "-webkit-transition-duration": "300ms, 2.3s",
-                "transition-property": "opacity, background-color",
+                "transition-property": "opacity, background-color, transform",
                 "transition-duration": "300ms, 2.3s"
             };
-            
+
             function _setStyleValues(styleValues, obj) {
                 var prop;
-                
+
                 for (prop in styleValues) {
                     obj.setProperty(prop, styleValues[prop]);
                 }
             }
 
-            _setStyleValues(stylesToSet, highlight.style);
+            _setStyleValues(mergedStyles, highlight.style);
             _setStyleValues(
                 doAnimation ? animateStartValues : animateEndValues,
                 highlight.style
             );
-            
-            
+
+
             if (doAnimation) {
                 _setStyleValues(transitionValues, highlight.style);
-                
+
                 window.setTimeout(function () {
                     _setStyleValues(animateEndValues, highlight.style);
                 }, 20);
             }
-        
+
             window.document.body.appendChild(highlight);
         },
-        
+
         add: function (element, doAnimation) {
-            if (this._elementExists(element) || element === document) {
+            if (this._elementExists(element) || element === window.document) {
                 return;
             }
             if (this.trigger) {
                 _trigger(element, "highlight", 1);
             }
-            this.elements.push(element);
             
+            if ((!window.event || window.event instanceof MessageEvent) && !isInViewport(element)) {
+                var top = getDocumentOffsetTop(element);
+                if (top) {
+                    top -= (window.innerHeight / 2);
+                    window.scrollTo(0, top);
+                }
+            }
+            this.elements.push(element);
+
             this._makeHighlightDiv(element, doAnimation);
         },
 
         clear: function () {
             var i, highlights = window.document.querySelectorAll("." + HIGHLIGHT_CLASSNAME),
                 body = window.document.body;
-        
+
             for (i = 0; i < highlights.length; i++) {
                 body.removeChild(highlights[i]);
             }
@@ -339,13 +534,13 @@ function RemoteFunctions(experimental) {
                     _trigger(this.elements[i], "highlight", 0);
                 }
             }
-            
+
             this.elements = [];
         },
-        
+
         redraw: function () {
             var i, highlighted;
-            
+
             // When redrawing a selector-based highlight, run a new selector
             // query to ensure we have the latest set of elements to highlight.
             if (this.selector) {
@@ -353,7 +548,7 @@ function RemoteFunctions(experimental) {
             } else {
                 highlighted = this.elements.slice(0);
             }
-            
+
             this.clear();
             for (i = 0; i < highlighted.length; i++) {
                 this.add(highlighted[i], false);
@@ -395,7 +590,7 @@ function RemoteFunctions(experimental) {
 
     function onMouseMove(event) {
         onMouseOver(event);
-        document.removeEventListener("mousemove", onMouseMove);
+        window.document.removeEventListener("mousemove", onMouseMove);
     }
 
     function onClick(event) {
@@ -412,11 +607,11 @@ function RemoteFunctions(experimental) {
 
     function onKeyUp(event) {
         if (_setup && !_validEvent(event)) {
-            document.removeEventListener("keyup", onKeyUp);
-            document.removeEventListener("mouseover", onMouseOver);
-            document.removeEventListener("mouseout", onMouseOut);
-            document.removeEventListener("mousemove", onMouseMove);
-            document.removeEventListener("click", onClick);
+            window.document.removeEventListener("keyup", onKeyUp);
+            window.document.removeEventListener("mouseover", onMouseOver);
+            window.document.removeEventListener("mouseout", onMouseOut);
+            window.document.removeEventListener("mousemove", onMouseMove);
+            window.document.removeEventListener("click", onClick);
             _localHighlight.clear();
             _localHighlight = undefined;
             _setup = false;
@@ -425,11 +620,11 @@ function RemoteFunctions(experimental) {
 
     function onKeyDown(event) {
         if (!_setup && _validEvent(event)) {
-            document.addEventListener("keyup", onKeyUp);
-            document.addEventListener("mouseover", onMouseOver);
-            document.addEventListener("mouseout", onMouseOut);
-            document.addEventListener("mousemove", onMouseMove);
-            document.addEventListener("click", onClick);
+            window.document.addEventListener("keyup", onKeyUp);
+            window.document.addEventListener("mouseover", onMouseOver);
+            window.document.addEventListener("mouseout", onMouseOut);
+            window.document.addEventListener("mousemove", onMouseMove);
+            window.document.addEventListener("click", onClick);
             _localHighlight = new Highlight("#ecc", true);
             _setup = true;
         }
@@ -443,7 +638,7 @@ function RemoteFunctions(experimental) {
     function keepAlive() {
         lastKeepAliveTime = Date.now();
     }
-    
+
     // show goto
     function showGoto(targets) {
         if (!_currentMenu) {
@@ -479,28 +674,28 @@ function RemoteFunctions(experimental) {
     // highlight a rule
     function highlightRule(rule) {
         hideHighlight();
-        var i, nodes = document.querySelectorAll(rule);
+        var i, nodes = window.document.querySelectorAll(rule);
         for (i = 0; i < nodes.length; i++) {
             highlight(nodes[i]);
         }
         _remoteHighlight.selector = rule;
     }
-    
+
     // redraw active highlights
     function redrawHighlights() {
         if (_remoteHighlight) {
             _remoteHighlight.redraw();
         }
     }
-    
+
     window.addEventListener("resize", redrawHighlights);
     // Add a capture-phase scroll listener to update highlights when
     // any element scrolls.
-    
+
     function _scrollHandler(e) {
         // Document scrolls can be updated immediately. Any other scrolls
         // need to be updated on a timer to ensure the layout is correct.
-        if (e.target === document) {
+        if (e.target === window.document) {
             redrawHighlights();
         } else {
             if (_remoteHighlight || _localHighlight) {
@@ -508,23 +703,23 @@ function RemoteFunctions(experimental) {
             }
         }
     }
-    
+
     window.addEventListener("scroll", _scrollHandler, true);
-    
+
     var aliveTest = window.setInterval(function () {
         if (Date.now() > lastKeepAliveTime + KEEP_ALIVE_TIMEOUT) {
             // Remove highlights
             hideHighlight();
-            
+
             // Remove listeners
             window.removeEventListener("resize", redrawHighlights);
             window.removeEventListener("scroll", _scrollHandler, true);
-            
+
             // Clear this interval
             window.clearInterval(aliveTest);
         }
     }, 1000);
-    
+
     /**
      * Constructor
      * @param {Document} htmlDocument
@@ -545,15 +740,15 @@ function RemoteFunctions(experimental) {
         if (!id) {
             return null;
         }
-        
+
         if (this.rememberedNodes && this.rememberedNodes[id]) {
             return this.rememberedNodes[id];
         }
-        
+
         var results = this.htmlDocument.querySelectorAll("[data-brackets-id='" + id + "']");
         return results && results[0];
     };
-    
+
     /**
      * @private
      * Insert a new child element
@@ -564,13 +759,13 @@ function RemoteFunctions(experimental) {
     DOMEditHandler.prototype._insertChildNode = function (targetElement, childElement, edit) {
         var before = this._queryBracketsID(edit.beforeID),
             after  = this._queryBracketsID(edit.afterID);
-        
+
         if (edit.firstChild) {
             before = targetElement.firstChild;
         } else if (edit.lastChild) {
             after = targetElement.lastChild;
         }
-        
+
         if (before) {
             targetElement.insertBefore(childElement, before);
         } else if (after && (after !== targetElement.lastChild)) {
@@ -579,7 +774,7 @@ function RemoteFunctions(experimental) {
             targetElement.appendChild(childElement);
         }
     };
-    
+
     /**
      * @private
      * Given a string containing encoded entity references, returns the string with the entities decoded.
@@ -595,7 +790,7 @@ function RemoteFunctions(experimental) {
         this.entityParseParent.textContent = "";
         return result;
     };
-    
+
     /**
      * @private
      * @param {Node} node
@@ -604,7 +799,7 @@ function RemoteFunctions(experimental) {
     function _isRawTextNode(node) {
         return (node.nodeType === Node.ELEMENT_NODE && /script|style|noscript|noframes|noembed|iframe|xmp/i.test(node.tagName));
     }
-    
+
     /**
      * @private
      * Replace a range of text and comment nodes with an optional new text node
@@ -631,7 +826,7 @@ function RemoteFunctions(experimental) {
             }
             return node;
         }
-        
+
         var start           = (edit.afterID)  ? this._queryBracketsID(edit.afterID)  : null,
             startMissing    = edit.afterID && !start,
             end             = (edit.beforeID) ? this._queryBracketsID(edit.beforeID) : null,
@@ -642,7 +837,7 @@ function RemoteFunctions(experimental) {
             textNode        = (edit.content !== undefined) ? this.htmlDocument.createTextNode(_isRawTextNode(targetElement) ? edit.content : this._parseEntities(edit.content)) : null,
             lastRemovedWasText,
             isText;
-        
+
         // remove all nodes inside the range
         while (current && (current !== end)) {
             isText = current.nodeType === Node.TEXT_NODE;
@@ -668,7 +863,7 @@ function RemoteFunctions(experimental) {
                 current = next;
             }
         }
-        
+
         if (textNode) {
             // OK to use nextSibling here (not nextIgnoringHighlights) because we do literally
             // want to insert immediately after the start tag.
@@ -681,7 +876,7 @@ function RemoteFunctions(experimental) {
             }
         }
     };
-    
+
     /**
      * @private
      * Apply an array of DOM edits to the document
@@ -692,12 +887,12 @@ function RemoteFunctions(experimental) {
             targetElement,
             childElement,
             self = this;
-        
+
         this.rememberedNodes = {};
-        
+
         edits.forEach(function (edit) {
             var editIsSpecialTag = edit.type === "elementInsert" && (edit.tag === "html" || edit.tag === "head" || edit.tag === "body");
-            
+
             if (edit.type === "rememberNodes") {
                 edit.tagIDs.forEach(function (tagID) {
                     var node = self._queryBracketsID(tagID);
@@ -710,15 +905,15 @@ function RemoteFunctions(experimental) {
                 });
                 return;
             }
-            
+
             targetID = edit.type.match(/textReplace|textDelete|textInsert|elementInsert|elementMove/) ? edit.parentID : edit.tagID;
             targetElement = self._queryBracketsID(targetID);
-            
+
             if (!targetElement && !editIsSpecialTag) {
                 console.error("data-brackets-id=" + targetID + " not found");
                 return;
             }
-            
+
             switch (edit.type) {
             case "attrChange":
             case "attrAdd":
@@ -748,12 +943,12 @@ function RemoteFunctions(experimental) {
                 if (!editIsSpecialTag) {
                     childElement = self.htmlDocument.createElement(edit.tag);
                 }
-                
+
                 Object.keys(edit.attributes).forEach(function (attr) {
                     childElement.setAttribute(attr, self._parseEntities(edit.attributes[attr]));
                 });
                 childElement.setAttribute("data-brackets-id", edit.tagID);
-                
+
                 if (!editIsSpecialTag) {
                     self._insertChildNode(targetElement, childElement, edit);
                 }
@@ -772,17 +967,17 @@ function RemoteFunctions(experimental) {
                 break;
             }
         });
-        
+
         this.rememberedNodes = {};
-        
+
         // update highlight after applying diffs
         redrawHighlights();
     };
-    
+
     function applyDOMEdits(edits) {
         _editHandler.apply(edits);
     }
-    
+
     /**
      *
      * @param {Element} elem
@@ -793,18 +988,18 @@ function RemoteFunctions(experimental) {
             len,
             node,
             value;
-        
+
         len = elem.attributes.length;
         for (i = 0; i < len; i++) {
             node = elem.attributes.item(i);
             value = (node.name === "data-brackets-id") ? parseInt(node.value, 10) : node.value;
             json.attributes[node.name] = value;
         }
-        
+
         len = elem.childNodes.length;
         for (i = 0; i < len; i++) {
             node = elem.childNodes.item(i);
-            
+
             // ignores comment nodes and visuals generated by live preview
             if (node.nodeType === Node.ELEMENT_NODE && node.className !== HIGHLIGHT_CLASSNAME) {
                 json.children.push(_domElementToJSON(node));
@@ -812,21 +1007,61 @@ function RemoteFunctions(experimental) {
                 json.children.push({ content: node.nodeValue });
             }
         }
-        
+
         return json;
     }
-    
+
     function getSimpleDOM() {
-        return JSON.stringify(_domElementToJSON(document.documentElement));
+        return JSON.stringify(_domElementToJSON(window.document.documentElement));
+    }
+    
+    function updateConfig(newConfig) {
+        config = JSON.parse(newConfig);
+        return JSON.stringify(config);
     }
 
     // init
     _editHandler = new DOMEditHandler(window.document);
-    
+
     if (experimental) {
         window.document.addEventListener("keydown", onKeyDown);
     }
+    
+    var _ws = null;
 
+    function onDocumentClick(event) {
+        var element = event.target,
+            currentDataId,
+            newDataId;
+        
+        if (_ws && element && element.hasAttribute('data-brackets-id')) {
+            _ws.send(JSON.stringify({
+                type: "message",
+                message: element.getAttribute('data-brackets-id')
+            }));
+        }
+    }
+    
+    
+    function createWebSocket() {
+        _ws = new WebSocket("ws://localhost:" + remoteWSPort);
+        _ws.onopen = function () {
+            window.document.addEventListener("click", onDocumentClick);
+        };
+                
+        _ws.onmessage = function (evt) {
+        };
+                
+        _ws.onclose = function () {
+            // websocket is closed
+            window.document.removeEventListener("click", onDocumentClick);
+        };
+    }
+    
+    if (remoteWSPort) {
+        createWebSocket();
+    }
+    
     return {
         "DOMEditHandler"        : DOMEditHandler,
         "keepAlive"             : keepAlive,
@@ -836,6 +1071,7 @@ function RemoteFunctions(experimental) {
         "highlightRule"         : highlightRule,
         "redrawHighlights"      : redrawHighlights,
         "applyDOMEdits"         : applyDOMEdits,
-        "getSimpleDOM"          : getSimpleDOM
+        "getSimpleDOM"          : getSimpleDOM,
+        "updateConfig"          : updateConfig
     };
 }

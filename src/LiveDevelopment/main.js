@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Adobe Systems Incorporated. All rights reserved.
+ * Copyright (c) 2012 - present Adobe Systems Incorporated. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,9 +21,7 @@
  *
  */
 
-
-/*jslint vars: true, plusplus: true, devel: true, nomen: true, indent: 4, forin: true, maxerr: 50, regexp: true */
-/*global define, $, less, window */
+/*global less */
 
 /**
  * main integrates LiveDevelopment into Brackets
@@ -50,7 +48,7 @@ define(function main(require, exports, module) {
         Strings             = require("strings"),
         ExtensionUtils      = require("utils/ExtensionUtils"),
         StringUtils         = require("utils/StringUtils");
-    
+
     var params = new UrlParams();
     var config = {
         experimental: false, // enable experimental features
@@ -70,15 +68,42 @@ define(function main(require, exports, module) {
         _allStatusStyles = ["warning", "info", "success", "out-of-sync", "sync-error"].join(" ");
 
     var _$btnGoLive; // reference to the GoLive button
-    
+
     // current selected implementation (LiveDevelopment | LiveDevMultiBrowser)
     var LiveDevImpl;
-    
+
     // "livedev.multibrowser" preference
     var PREF_MULTIBROWSER = "multibrowser";
     var prefs = PreferencesManager.getExtensionPrefs("livedev");
-    var multiBrowserPref = prefs.definePreference(PREF_MULTIBROWSER, "boolean", false);
+    var multiBrowserPref = prefs.definePreference(PREF_MULTIBROWSER, "boolean", false, {
+        description: Strings.DESCRIPTION_LIVE_DEV_MULTIBROWSER
+    });
 
+    // "livedev.remoteHighlight" preference
+    var PREF_REMOTEHIGHLIGHT = "remoteHighlight";
+    var remoteHighlightPref = prefs.definePreference(PREF_REMOTEHIGHLIGHT, "object", {
+        animateStartValue: {
+            "background-color": "rgba(0, 162, 255, 0.5)",
+            "opacity": 0
+        },
+        animateEndValue: {
+            "background-color": "rgba(0, 162, 255, 0)",
+            "opacity": 0.6
+        },
+        "paddingStyling": {
+            "border-width": "1px",
+            "border-style": "dashed",
+            "border-color": "rgba(0, 162, 255, 0.5)"
+        },
+        "marginStyling": {
+            "background-color": "rgba(21, 165, 255, 0.58)"
+        },
+        "borderColor": "rgba(21, 165, 255, 0.85)",
+        "showPaddingMargin": true
+    }, {
+        description: "LivePreview highlight settings"
+    });
+    
     /** Toggles or sets the preference **/
     function _togglePref(key, value) {
         var val,
@@ -97,25 +122,24 @@ define(function main(require, exports, module) {
 
         return val;
     }
-    
+
     /* Toggles or sets the "livedev.multibrowser" preference */
     function _toggleLivePreviewMultiBrowser(value) {
         var val = _togglePref(PREF_MULTIBROWSER, value);
-        
+
         CommandManager.get(Commands.TOGGLE_LIVE_PREVIEW_MB_MODE).setChecked(val);
         // Issue #10217: multi-browser does not support user server, so disable
         // the setting if it is enabled.
         CommandManager.get(Commands.FILE_PROJECT_SETTINGS).setEnabled(!val);
     }
-    
+
     /** Load Live Development LESS Style */
     function _loadStyles() {
-        var lessText    = require("text!LiveDevelopment/main.less"),
-            parser      = new less.Parser();
-        
-        parser.parse(lessText, function onParse(err, tree) {
+        var lessText = require("text!LiveDevelopment/main.less");
+
+        less.render(lessText, function onParse(err, tree) {
             console.assert(!err, err);
-            ExtensionUtils.addEmbeddedStyleSheet(tree.toCSS());
+            ExtensionUtils.addEmbeddedStyleSheet(tree.css);
         });
     }
 
@@ -173,7 +197,7 @@ define(function main(require, exports, module) {
     function _showStatusChangeReason(reason) {
         // Destroy the previous twipsy (options are not updated otherwise)
         _$btnGoLive.twipsy("hide").removeData("twipsy");
-        
+
         // If there was no reason or the action was an explicit request by the user, don't show a twipsy
         if (!reason || reason === "explicit_close") {
             return;
@@ -184,7 +208,7 @@ define(function main(require, exports, module) {
         if (!translatedReason) {
             translatedReason = StringUtils.format(Strings.LIVE_DEV_CLOSED_UNKNOWN_REASON, reason);
         }
-        
+
         // Configure the twipsy
         var options = {
             placement: "left",
@@ -198,7 +222,7 @@ define(function main(require, exports, module) {
         // Show the twipsy with the explanation
         _$btnGoLive.twipsy(options).twipsy("show");
     }
-    
+
     /** Create the menu item "Go Live" */
     function _setupGoLiveButton() {
         if (!_$btnGoLive) {
@@ -221,7 +245,7 @@ define(function main(require, exports, module) {
         // Initialize tooltip for 'not connected' state
         _setLabel(_$btnGoLive, null, _status[1].style, _status[1].tooltip);
     }
-    
+
     /** Maintains state of the Live Preview menu item */
     function _setupGoLiveMenu() {
         LiveDevImpl.on("statusChange", function statusChange(event, status) {
@@ -235,7 +259,7 @@ define(function main(require, exports, module) {
     function _updateHighlightCheckmark() {
         CommandManager.get(Commands.FILE_LIVE_HIGHLIGHT).setChecked(config.highlight);
     }
-    
+
     function _handlePreviewHighlightCommand() {
         config.highlight = !config.highlight;
         _updateHighlightCheckmark();
@@ -246,7 +270,7 @@ define(function main(require, exports, module) {
         }
         PreferencesManager.setViewState("livedev.highlight", config.highlight);
     }
-    
+
     /**
      * Sets the MultiBrowserLiveDev implementation if multibrowser is truthy,
      * keeps default LiveDevelopment implementation based on CDT otherwise.
@@ -256,7 +280,7 @@ define(function main(require, exports, module) {
         if (multibrowser) {
             // set implemenation
             LiveDevImpl = MultiBrowserLiveDev;
-            // update styles for UI status 
+            // update styles for UI status
             _status = [
                 { tooltip: Strings.LIVE_DEV_STATUS_TIP_NOT_CONNECTED, style: "warning" },
                 { tooltip: Strings.LIVE_DEV_STATUS_TIP_NOT_CONNECTED, style: "" },
@@ -285,7 +309,7 @@ define(function main(require, exports, module) {
         // toggle the menu
         _toggleLivePreviewMultiBrowser(multibrowser);
     }
-    
+
     /** Setup window references to useful LiveDevelopment modules */
     function _setupDebugHelpers() {
         window.ld = LiveDevelopment;
@@ -299,25 +323,26 @@ define(function main(require, exports, module) {
             LiveDevelopment.reload();
         }
     }
-    
+
     /** Initialize LiveDevelopment */
     AppInit.appReady(function () {
         params.parse();
+        config.remoteHighlight = prefs.get(PREF_REMOTEHIGHLIGHT);
 
         Inspector.init(config);
         LiveDevelopment.init(config);
-        
-        // init experimental multi-browser implementation 
+
+        // init experimental multi-browser implementation
         // it can be enable by setting 'livedev.multibrowser' preference to true.
-        // It has to be initiated at this point in case of dynamically switching 
+        // It has to be initiated at this point in case of dynamically switching
         // by changing the preference value.
         MultiBrowserLiveDev.init(config);
 
         _loadStyles();
         _updateHighlightCheckmark();
-        
+
         _setImplementation(prefs.get(PREF_MULTIBROWSER));
-        
+
         if (config.debug) {
             _setupDebugHelpers();
         }
@@ -328,7 +353,7 @@ define(function main(require, exports, module) {
                 DocumentManager.getCurrentDocument()) {
             _handleGoLiveCommand();
         }
-        
+
         // Redraw highlights when window gets focus. This ensures that the highlights
         // will be in sync with any DOM changes that may have occurred.
         $(window).focus(function () {
@@ -336,10 +361,10 @@ define(function main(require, exports, module) {
                 LiveDevelopment.redrawHighlight();
             }
         });
-        
+
         multiBrowserPref
             .on("change", function () {
-                // Stop the current session if it is open and set implementation based on 
+                // Stop the current session if it is open and set implementation based on
                 // the pref value. We could start the new implementation immediately, but
                 // since the current document is potentially a user preferences file, Live
                 // Preview will not locate the html file to serve.
@@ -354,29 +379,33 @@ define(function main(require, exports, module) {
                     _setImplementation(prefs.get(PREF_MULTIBROWSER));
                 }
             });
+        
+        remoteHighlightPref
+            .on("change", function () {
+                config.remoteHighlight = prefs.get(PREF_REMOTEHIGHLIGHT);
+                       
+                if (LiveDevImpl && LiveDevImpl.status >= LiveDevImpl.STATUS_ACTIVE) {
+                    LiveDevImpl.agents.remote.call("updateConfig",JSON.stringify(config));
+                }
+            });
 
     });
-    
+
     // init prefs
     PreferencesManager.stateManager.definePreference("livedev.highlight", "boolean", true)
         .on("change", function () {
             config.highlight = PreferencesManager.getViewState("livedev.highlight");
             _updateHighlightCheckmark();
         });
-    
-    PreferencesManager.convertPreferences(module, {
-        "highlight": "user livedev.highlight",
-        "afterFirstLaunch": "user livedev.afterFirstLaunch"
-    }, true);
-        
+
     config.highlight = PreferencesManager.getViewState("livedev.highlight");
-   
+
     // init commands
     CommandManager.register(Strings.CMD_LIVE_FILE_PREVIEW,  Commands.FILE_LIVE_FILE_PREVIEW, _handleGoLiveCommand);
     CommandManager.register(Strings.CMD_LIVE_HIGHLIGHT, Commands.FILE_LIVE_HIGHLIGHT, _handlePreviewHighlightCommand);
     CommandManager.register(Strings.CMD_RELOAD_LIVE_PREVIEW, Commands.CMD_RELOAD_LIVE_PREVIEW, _handleReloadLivePreviewCommand);
     CommandManager.register(Strings.CMD_TOGGLE_LIVE_PREVIEW_MB_MODE, Commands.TOGGLE_LIVE_PREVIEW_MB_MODE, _toggleLivePreviewMultiBrowser);
-    
+
     CommandManager.get(Commands.FILE_LIVE_HIGHLIGHT).setEnabled(false);
 
     // Export public functions

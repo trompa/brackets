@@ -1,29 +1,28 @@
 /*
- * Copyright (c) 2013 Adobe Systems Incorporated. All rights reserved.
- *  
+ * Copyright (c) 2013 - present Adobe Systems Incorporated. All rights reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"), 
- * to deal in the Software without restriction, including without limitation 
- * the rights to use, copy, modify, merge, publish, distribute, sublicense, 
- * and/or sell copies of the Software, and to permit persons to whom the 
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- *  
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- *  
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING 
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
- * 
+ *
  */
 
-
-/*jslint vars: true, plusplus: true, devel: true, node: true, nomen: true,
-indent: 4, maxerr: 50 */
+/*eslint-env node */
+/*jslint node: true */
 
 "use strict";
 
@@ -91,32 +90,39 @@ function _removeFailedInstallation(installDirectory) {
 function _performInstall(packagePath, installDirectory, validationResult, callback) {
     validationResult.installedTo = installDirectory;
 
+    function fail(err) {
+        _removeFailedInstallation(installDirectory);
+        callback(err, null);
+    }
+
+    function finish() {
+        // The status may have already been set previously (as in the
+        // DISABLED case.
+        if (!validationResult.installationStatus) {
+            validationResult.installationStatus = Statuses.INSTALLED;
+        }
+        callback(null, validationResult);
+    }
+
     fs.mkdirs(installDirectory, function (err) {
         if (err) {
             callback(err);
             return;
         }
         var sourceDir = path.join(validationResult.extractDir, validationResult.commonPrefix);
-        
+
         fs.copy(sourceDir, installDirectory, function (err) {
             if (err) {
-                _removeFailedInstallation(installDirectory);
-                callback(err, null);
-            } else {
-                // The status may have already been set previously (as in the
-                // DISABLED case.
-                if (!validationResult.installationStatus) {
-                    validationResult.installationStatus = Statuses.INSTALLED;
-                }
-                callback(null, validationResult);
+                return fail(err);
             }
+            finish();
         });
     });
 }
 
 /**
  * Private function to remove the target directory and then install.
- * 
+ *
  * @param {string} Absolute path to the package zip file
  * @param {string} Absolute path to the destination directory for unzipping
  * @param {Object} the return value with the useful information for the client
@@ -143,7 +149,7 @@ function _checkExistingInstallation(validationResult, installDirectory, systemIn
         callback(null, validationResult);
         return;
     }
-    
+
     fs.readJson(path.join(installDirectory, "package.json"), function (err, packageObj) {
         // if the package.json is unreadable, we assume that the new package is an update
         // that is the first to include a package.json.
@@ -171,7 +177,7 @@ function _checkExistingInstallation(validationResult, installDirectory, systemIn
 /**
  * A "legacy package" is an extension that was installed based on the GitHub name without
  * a package.json file. Checking for the presence of these legacy extensions will help
- * users upgrade if the extension developer puts a different name in package.json than 
+ * users upgrade if the extension developer puts a different name in package.json than
  * the name of the GitHub project.
  *
  * @param {string} legacyDirectory directory to check for old-style extension.
@@ -199,23 +205,24 @@ function legacyPackageCheck(legacyDirectory) {
  * or the name of the zip file).
  *
  * The destinationDirectory will be created if it does not exist.
- * 
+ *
  * @param {string} Absolute path to the package zip file
  * @param {string} the destination directory
- * @param {{disabledDirectory: !string, apiVersion: !string, nameHint: ?string, 
+ * @param {{disabledDirectory: !string, apiVersion: !string, nameHint: ?string,
  *      systemExtensionDirectory: !string}} additional settings to control the installation
  * @param {function} callback (err, result)
+ * @param {function} pCallback (msg) callback for notifications about operation progress
  * @param {boolean} _doUpdate  private argument to signal that an update should be performed
  */
-function _cmdInstall(packagePath, destinationDirectory, options, callback, _doUpdate) {
+function _cmdInstall(packagePath, destinationDirectory, options, callback, pCallback, _doUpdate) {
     if (!options || !options.disabledDirectory || !options.apiVersion || !options.systemExtensionDirectory) {
         callback(new Error(Errors.MISSING_REQUIRED_OPTIONS), null);
         return;
     }
-    
-    var validateCallback = function (err, validationResult) {
+
+    function validateCallback(err, validationResult) {
         validationResult.localPath = packagePath;
-        
+
         // This is a wrapper for the callback that will delete the temporary
         // directory to which the package was unzipped.
         function deleteTempAndCallback(err) {
@@ -225,14 +232,14 @@ function _cmdInstall(packagePath, destinationDirectory, options, callback, _doUp
             }
             callback(err, validationResult);
         }
-        
+
         // If there was trouble at the validation stage, we stop right away.
         if (err || validationResult.errors.length > 0) {
             validationResult.installationStatus = Statuses.FAILED;
             deleteTempAndCallback(err, validationResult);
             return;
         }
-        
+
         // Prefers the package.json name field, but will take the zip
         // file's name if that's all that's available.
         var extensionName, guessedName;
@@ -246,12 +253,12 @@ function _cmdInstall(packagePath, destinationDirectory, options, callback, _doUp
         } else {
             extensionName = guessedName;
         }
-        
+
         validationResult.name = extensionName;
         var installDirectory = path.join(destinationDirectory, extensionName),
             legacyDirectory = path.join(destinationDirectory, guessedName),
             systemInstallDirectory = path.join(options.systemExtensionDirectory, extensionName);
-        
+
         if (validationResult.metadata && validationResult.metadata.engines &&
                 validationResult.metadata.engines.brackets) {
             var compatible = semver.satisfies(options.apiVersion,
@@ -264,15 +271,15 @@ function _cmdInstall(packagePath, destinationDirectory, options, callback, _doUp
                 return;
             }
         }
-        
+
         // The "legacy" stuff should go away after all of the commonly used extensions
         // have been upgraded with package.json files.
         var hasLegacyPackage = validationResult.metadata && legacyPackageCheck(legacyDirectory);
-        
+
         // If the extension is already there, we signal to the front end that it's already installed
         // unless the front end has signaled an intent to update.
         if (hasLegacyPackage || fs.existsSync(installDirectory) || fs.existsSync(systemInstallDirectory)) {
-            if (_doUpdate) {
+            if (_doUpdate === true) {
                 if (hasLegacyPackage) {
                     // When there's a legacy installed extension, remove it first,
                     // then also remove any new-style directory the user may have.
@@ -300,9 +307,9 @@ function _cmdInstall(packagePath, destinationDirectory, options, callback, _doUp
             validationResult.disabledReason = null;
             _performInstall(packagePath, installDirectory, validationResult, deleteTempAndCallback);
         }
-    };
-    
-    validate(packagePath, {}, validateCallback);
+    }
+
+    validate(packagePath, options, validateCallback);
 }
 
 /**
@@ -327,33 +334,34 @@ function _cmdInstall(packagePath, destinationDirectory, options, callback, _doUp
  * or the name of the zip file).
  *
  * The destinationDirectory will be created if it does not exist.
- * 
+ *
  * @param {string} Absolute path to the package zip file
  * @param {string} the destination directory
- * @param {{disabledDirectory: !string, apiVersion: !string, nameHint: ?string, 
+ * @param {{disabledDirectory: !string, apiVersion: !string, nameHint: ?string,
  *      systemExtensionDirectory: !string}} additional settings to control the installation
  * @param {function} callback (err, result)
+ * @param {function} pCallback (msg) callback for notifications about operation progress
  */
-function _cmdUpdate(packagePath, destinationDirectory, options, callback) {
-    _cmdInstall(packagePath, destinationDirectory, options, callback, true);
+function _cmdUpdate(packagePath, destinationDirectory, options, callback, pCallback) {
+    _cmdInstall(packagePath, destinationDirectory, options, callback, pCallback, true);
 }
 
 /**
  * Wrap up after the given download has terminated (successfully or not). Closes connections, calls back the
  * client's callback, and IF there was an error, delete any partially-downloaded file.
- * 
+ *
  * @param {string} downloadId Unique id originally passed to _cmdDownloadFile()
  * @param {?string} error If null, download was treated as successful
  */
 function _endDownload(downloadId, error) {
     var downloadInfo = pendingDownloads[downloadId];
     delete pendingDownloads[downloadId];
-    
+
     if (error) {
         // Abort the download if still pending
         // Note that this will trigger response's "end" event
         downloadInfo.request.abort();
-        
+
         // Clean up any partially-downloaded file
         // (if no outStream, then we never got a response back yet and never created any file)
         if (downloadInfo.outStream) {
@@ -361,9 +369,9 @@ function _endDownload(downloadId, error) {
                 fs.unlink(downloadInfo.localPath);
             });
         }
-        
+
         downloadInfo.callback(error, null);
-        
+
     } else {
         // Download completed successfully. Flush stream to disk and THEN signal completion
         downloadInfo.outStream.end(function () {
@@ -375,18 +383,18 @@ function _endDownload(downloadId, error) {
 /**
  * Implements "downloadFile" command, asynchronously.
  */
-function _cmdDownloadFile(downloadId, url, proxy, callback) {
+function _cmdDownloadFile(downloadId, url, proxy, callback, pCallback) {
     // Backwards compatibility check, added in 0.37
     if (typeof proxy === "function") {
         callback = proxy;
         proxy = undefined;
     }
-    
+
     if (pendingDownloads[downloadId]) {
         callback(Errors.DOWNLOAD_ID_IN_USE, null);
         return;
     }
-    
+
     var req = request.get({
         url: url,
         encoding: null,
@@ -404,7 +412,7 @@ function _cmdDownloadFile(downloadId, url, proxy, callback) {
                 _endDownload(downloadId, [Errors.BAD_HTTP_STATUS, response.statusCode]);
                 return;
             }
-            
+
             var stream = temp.createWriteStream("brackets");
             if (!stream) {
                 _endDownload(downloadId, Errors.CANNOT_WRITE_TEMP);
@@ -412,11 +420,11 @@ function _cmdDownloadFile(downloadId, url, proxy, callback) {
             }
             pendingDownloads[downloadId].localPath = stream.path;
             pendingDownloads[downloadId].outStream = stream;
-            
+
             stream.write(body);
             _endDownload(downloadId);
         });
-    
+
     pendingDownloads[downloadId] = { request: req, callback: callback };
 }
 
@@ -436,7 +444,7 @@ function _cmdAbortDownload(downloadId) {
 /**
  * Implements the remove extension command.
  */
-function _cmdRemove(extensionDir, callback) {
+function _cmdRemove(extensionDir, callback, pCallback) {
     fs.remove(extensionDir, function (err) {
         if (err) {
             callback(err);
@@ -495,7 +503,7 @@ function init(domainManager) {
             description: "absolute filesystem path where this extension should be installed"
         }, {
             name: "options",
-            type: "{disabledDirectory: !string, apiVersion: !string, nameHint: ?string, systemExtensionDirectory: !string}",
+            type: "{disabledDirectory: !string, apiVersion: !string, nameHint: ?string, systemExtensionDirectory: !string, proxy: ?string}",
             description: "installation options: disabledDirectory should be set so that extensions can be installed disabled."
         }],
         [{

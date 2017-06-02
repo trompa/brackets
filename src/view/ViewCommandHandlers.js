@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Adobe Systems Incorporated. All rights reserved.
+ * Copyright (c) 2012 - present Adobe Systems Incorporated. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,8 +21,7 @@
  *
  */
 
-/*jslint vars: true, plusplus: true, devel: true, nomen: true, indent: 4, maxerr: 50 */
-/*global define, $ */
+/*global less */
 
 /**
  * The ViewCommandHandlers object dispatches the following event(s):
@@ -45,9 +44,31 @@ define(function (require, exports, module) {
         ThemeSettings       = require("view/ThemeSettings"),
         MainViewManager     = require("view/MainViewManager"),
         AppInit             = require("utils/AppInit"),
-        _                   = require("thirdparty/lodash");
+        _                   = require("thirdparty/lodash"),
+        FontRuleTemplate    = require("text!view/fontrules/font-based-rules.less");
 
     var prefs = PreferencesManager.getExtensionPrefs("fonts");
+    
+    
+    /**
+     * Font sizes should be validated by this regexp
+     */
+    var validFontSizeRegExpStr = "^([0-9]+)?(\\.)?([0-9]+)(px|em)$";
+    // Need RegExp as a string to be exported for use with HTML5 pattern attribute
+
+    /**
+     * @private
+     * The currently present font size. Used to detect no-op changes.
+     * @type {string}
+     */
+    var currFontSize;
+
+    /**
+     * @private
+     * The currently present font family. Used to detect no-op changes.
+     * @type {string}
+     */
+    var currFontFamily;
 
     /**
      * @const
@@ -92,7 +113,7 @@ define(function (require, exports, module) {
      * @type {string}
      */
     var DEFAULT_FONT_FAMILY = "'SourceCodePro-Medium', ＭＳ ゴシック, 'MS Gothic', monospace";
-
+    
     /**
      * @private
      * Removes style property from the DOM
@@ -101,26 +122,33 @@ define(function (require, exports, module) {
     function _removeDynamicProperty(propertyID) {
         $("#" + propertyID).remove();
     }
-
+    
     /**
      * @private
      * Add the style property to the DOM
      * @param {string} propertyID Is the property ID to be added
-     * @param {string} name Is the name of the style property
-     * @param {string} value Is the value of the style
-     * @param {boolean} important Is a flag to make the style property !important
+     * @param {object} ruleCfg Is the CSS Rule configuration object
+     * @param {string} ruleCfg.propName Is the name of the style property
+     * @param {string} ruleCfg.propValue Is the value of the style property
+     * @param {boolean} ruleCfg.priorityFlag Is a flag to make the style property !important
+     * @param {string} ruleCfg.ruleName Optional Selctor name to be used for the rule
+     * @param {string} ruleCfg.ruleText Optional selector definition text
      */
-    function _addDynamicProperty(propertyID, name, value, important, cssRule) {
-        cssRule = cssRule || ".CodeMirror";
+    function _addDynamicProperty(propertyID, ruleCfg) {
         var $style   = $("<style type='text/css'></style>").attr("id", propertyID);
-        var styleStr = StringUtils.format("{0}: {1}{2}", name, value, important ? " !important" : "");
-        $style.html(cssRule + "{ " + styleStr + " }");
+        if (ruleCfg.ruleText) {
+            $style.html(ruleCfg.ruleText);
+        } else {
+            var cssRule = ruleCfg.ruleName || ".CodeMirror";
+            var styleStr = ruleCfg.ruleText || StringUtils.format("{0}: {1} {2}", ruleCfg.propName, ruleCfg.propValue, ruleCfg.priorityFlag ? "!important" : "");
+            $style.html(cssRule + "{ " + styleStr + " }");
+        }
 
         // Let's make sure we remove the already existing item from the DOM.
         _removeDynamicProperty(propertyID);
         $("head").append($style);
     }
-
+    
     /**
      * @private
      * Removes the styles used to update the font size
@@ -135,7 +163,16 @@ define(function (require, exports, module) {
      * @param {string} fontSize  A string with the font size and the size unit
      */
     function _addDynamicFontSize(fontSize) {
-        _addDynamicProperty(DYNAMIC_FONT_STYLE_ID, "font-size", fontSize, true);
+        var template = FontRuleTemplate.split("{font-size-param}").join(fontSize);
+        less.render(template, null, function onParse(err, tree) {
+            if (err) {
+                console.error(err);
+            } else {
+                _addDynamicProperty(DYNAMIC_FONT_STYLE_ID, {
+                    ruleText: tree.css
+                });
+            }
+        });
     }
 
     /**
@@ -152,7 +189,10 @@ define(function (require, exports, module) {
      * @param {string} fontFamily  A string with the font family
      */
     function _addDynamicFontFamily(fontFamily) {
-        _addDynamicProperty(DYNAMIC_FONT_FAMILY_ID, "font-family", fontFamily);
+        _addDynamicProperty(DYNAMIC_FONT_FAMILY_ID, {
+            propName: "font-family",
+            propValue: fontFamily
+        });
     }
 
     /**
@@ -194,9 +234,7 @@ define(function (require, exports, module) {
      * @param {string} fontSize The font size with size unit as 'px' or 'em'
      */
     function setFontSize(fontSize) {
-        var oldValue = prefs.get("fontSize");
-
-        if (oldValue === fontSize) {
+        if (currFontSize === fontSize) {
             return;
         }
 
@@ -214,7 +252,8 @@ define(function (require, exports, module) {
             }
         });
 
-        exports.trigger("fontSizeChange", fontSize, oldValue);
+        exports.trigger("fontSizeChange", fontSize, currFontSize);
+        currFontSize = fontSize;
         prefs.set("fontSize", fontSize);
     }
 
@@ -232,10 +271,9 @@ define(function (require, exports, module) {
      * @param {string} fontFamily The font family to be set.  It can be a string with multiple comma separated fonts
      */
     function setFontFamily(fontFamily) {
-        var editor = EditorManager.getCurrentFullEditor(),
-            oldValue = prefs.get("fontFamily");
+        var editor = EditorManager.getCurrentFullEditor();
 
-        if (oldValue === fontFamily) {
+        if (currFontFamily === fontFamily) {
             return;
         }
 
@@ -244,11 +282,29 @@ define(function (require, exports, module) {
             _addDynamicFontFamily(fontFamily);
         }
 
-        exports.trigger("fontFamilyChange", fontFamily, oldValue);
+        exports.trigger("fontFamilyChange", fontFamily, currFontFamily);
+        currFontFamily = fontFamily;
         prefs.set("fontFamily", fontFamily);
 
         if (editor) {
             editor.refreshAll();
+        }
+    }
+
+
+    /**
+     * Font smoothing setter to set the anti-aliasing type for the code area on Mac.
+     * @param {string} aaType The antialiasing type to be set. It can take either "subpixel-antialiased" or "antialiased"
+     */
+    function setMacFontSmoothingType(aaType) {
+        var $editor_holder  = $("#editor-holder");
+
+        // Add/Remove the class based on the preference. Also
+        // default to subpixel AA in case of invalid entries.
+        if (aaType === "antialiased") {
+            $editor_holder.removeClass("subpixel-aa");
+        } else {
+            $editor_holder.addClass("subpixel-aa");
         }
     }
 
@@ -267,16 +323,18 @@ define(function (require, exports, module) {
      * @param {number} adjustment  Negative number to make the font smaller; positive number to make it bigger
      * @return {boolean} true if adjustment occurred, false if it did not occur
      */
-    function _adjustFontSize(adjustment) {
-        var fsStyle   = prefs.get("fontSize"),
-            validFont = /^[\d\.]+(px|em)$/;
-
-        // Make sure that the font size is expressed in terms we can handle (px or em). If not, simply bail.
-        if (fsStyle.search(validFont) === -1) {
+     function _adjustFontSize(adjustment) {
+        var fsStyle    = prefs.get("fontSize");
+        var validFontSizeRegExp = new RegExp(validFontSizeRegExpStr);
+        
+        // Make sure that the font size is expressed in terms we can
+        // handle (px or em). If not, simply bail.
+        
+         if (fsStyle.search(validFontSizeRegExp) === -1) {
             return false;
         }
 
-        // Guaranteed to work by the validation above.
+        // Guaranteed to work by validation above.
         var fsUnits = fsStyle.substring(fsStyle.length - 2, fsStyle.length),
             delta   = fsUnits === "px" ? 1 : 0.1,
             fsOld   = parseFloat(fsStyle.substring(0, fsStyle.length - 2)),
@@ -333,8 +391,10 @@ define(function (require, exports, module) {
      * Initializes the different settings that need to loaded
      */
     function init() {
-        _addDynamicFontFamily(prefs.get("fontFamily"));
-        _addDynamicFontSize(prefs.get("fontSize"));
+        currFontFamily = prefs.get("fontFamily");
+        _addDynamicFontFamily(currFontFamily);
+        currFontSize = prefs.get("fontSize");
+        _addDynamicFontSize(currFontSize);
         _updateUI();
     }
 
@@ -463,21 +523,6 @@ define(function (require, exports, module) {
         ThemeSettings.showDialog();
     }
 
-
-    /**
-     * @private
-     * Convert the old "fontSizeAdjustment" preference to the new view state.
-     *
-     * @param {string} key  The key of the preference to be examined for migration
-     *      of old preferences. Not used since we only have one in this module.
-     * @param {string} value  The value of "fontSizeAdjustment" preference
-     * @return {Object} JSON object for the new view state equivalent to
-     *      the old "fontSizeAdjustment" preference.
-     */
-    function _convertToNewViewState(key, value) {
-        return { "fontSizeStyle": (DEFAULT_FONT_SIZE + value) + "px" };
-    }
-
     // Register command handlers
     CommandManager.register(Strings.CMD_INCREASE_FONT_SIZE, Commands.VIEW_INCREASE_FONT_SIZE,  _handleIncreaseFontSize);
     CommandManager.register(Strings.CMD_DECREASE_FONT_SIZE, Commands.VIEW_DECREASE_FONT_SIZE,  _handleDecreaseFontSize);
@@ -486,24 +531,44 @@ define(function (require, exports, module) {
     CommandManager.register(Strings.CMD_SCROLL_LINE_DOWN,   Commands.VIEW_SCROLL_LINE_DOWN,    _handleScrollLineDown);
     CommandManager.register(Strings.CMD_THEMES,             Commands.CMD_THEMES_OPEN_SETTINGS, _handleThemeSettings);
 
-    PreferencesManager.convertPreferences(module, {"fontSizeAdjustment": "user"}, true, _convertToNewViewState);
+    prefs.definePreference("fontSize",   "string", DEFAULT_FONT_SIZE + "px", {
+        description: Strings.DESCRIPTION_FONT_SIZE
+    }).on("change", function () {
+        setFontSize(prefs.get("fontSize"));
+    });
+    prefs.definePreference("fontFamily", "string", DEFAULT_FONT_FAMILY, {
+        description: Strings.DESCRIPTION_FONT_FAMILY
+    }).on("change", function () {
+        setFontFamily(prefs.get("fontFamily"));
+    });
 
-    prefs.definePreference("fontSize",   "string", DEFAULT_FONT_SIZE + "px");
-    prefs.definePreference("fontFamily", "string", DEFAULT_FONT_FAMILY);
+    // Define a preference for font smoothing mode on Mac.
+    // By default fontSmoothing is set to "subpixel-antialiased"
+    // for the text inside code editor. It can be overridden
+    // to "antialiased", that would set text rendering AA to use
+    // gray scale antialiasing.
+    if (brackets.platform === "mac") {
+        prefs.definePreference("fontSmoothing", "string", "subpixel-antialiased", {
+            description: Strings.DESCRIPTION_FONT_SMOOTHING,
+            values: ["subpixel-antialiased", "antialiased"]
+        }).on("change", function () {
+            setMacFontSmoothingType(prefs.get("fontSmoothing"));
+        });
+    }
 
     // Update UI when opening or closing a document
     MainViewManager.on("currentFileChange", _updateUI);
 
     // Update UI when Brackets finishes loading
     AppInit.appReady(init);
-    
-    
+
     EventDispatcher.makeEventDispatcher(exports);
-    
+
     exports.restoreFontSize = restoreFontSize;
     exports.restoreFonts    = restoreFonts;
     exports.getFontSize     = getFontSize;
     exports.setFontSize     = setFontSize;
     exports.getFontFamily   = getFontFamily;
     exports.setFontFamily   = setFontFamily;
-});
+    exports.validFontSizeRegExp = validFontSizeRegExpStr;
+}); 
